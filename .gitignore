@@ -1,2 +1,5 @@
 .idea
 *.iml
+out
+gen
+local.properties
