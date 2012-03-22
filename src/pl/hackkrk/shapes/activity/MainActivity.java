@@ -1,25 +1,32 @@
 package pl.hackkrk.shapes.activity;
 
 import android.app.Activity;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothServerSocket;
+import android.bluetooth.BluetoothSocket;
 import android.content.Context;
-import android.graphics.Point;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.os.Bundle;
-import android.view.MotionEvent;
-import android.view.View;
+import android.util.Log;
 import pl.hackkrk.shapes.R;
 import pl.hackkrk.shapes.view.ShapeView;
 
-public class MainActivity extends Activity implements View.OnTouchListener, SensorEventListener {
-    public static final int HIT_BOX = 40;
-    ShapeView shapeView;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.util.UUID;
+
+public class MainActivity extends Activity implements SensorEventListener {
+    public static final UUID GAME_UUID = UUID.fromString("6d511540-7458-11e1-b0c4-0800200c9a66");
     private SensorManager sensorManager;
     private Sensor sensor;
-    private FloatPoint grabbedPoint;
-    private long drawingQuad;
+
+    FloatPoint point = new FloatPoint(200, 300);
+    private ShapeView shapeView;
 
     /**
      * Called when the activity is first created.
@@ -30,7 +37,6 @@ public class MainActivity extends Activity implements View.OnTouchListener, Sens
         setContentView(R.layout.main);
 
         shapeView = (ShapeView) findViewById(R.id.shape_view);
-        shapeView.setOnTouchListener(this);
     }
 
     @Override
@@ -40,6 +46,15 @@ public class MainActivity extends Activity implements View.OnTouchListener, Sens
         sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
         sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
         sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_FASTEST);
+
+        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+
+        try {
+            BluetoothServerSocket socket = adapter.listenUsingRfcommWithServiceRecord("game", GAME_UUID);
+            new GameThread(socket).start();
+        } catch (IOException e) {
+            Log.e("Errory", "fail", e);
+        }
     }
 
     @Override
@@ -48,8 +63,6 @@ public class MainActivity extends Activity implements View.OnTouchListener, Sens
 
         sensorManager.unregisterListener(this);
     }
-
-    Point twoFingerStart = null;
 
     public static class FloatPoint {
         FloatPoint(float x, float y) {
@@ -60,90 +73,15 @@ public class MainActivity extends Activity implements View.OnTouchListener, Sens
         public float x, y;
     }
 
-    FloatPoint[] points = new FloatPoint[0];
-
-    @Override
-    public boolean onTouch(View view, MotionEvent event) {
-        int count = event.getPointerCount();
-
-        if (count == 1 && event.getAction() != MotionEvent.ACTION_UP) {
-            if (grabbedPoint != null) {
-                grabbedPoint.x = event.getX();
-                grabbedPoint.y = event.getY();
-            } else {
-                grabbedPoint = findClosesPoint(event);
-            }
-        } else {
-            grabbedPoint = null;
-        }
-
-        if (count == 2) {
-            if (shouldTranslate(event)) {
-                float xMovement = event.getX() - twoFingerStart.x;
-                float yMovement = event.getY() - twoFingerStart.y;
-                move(xMovement, yMovement);
-            }
-
-            twoFingerStart = new Point((int) event.getX(), (int) event.getY());
-        } else {
-            twoFingerStart = null;
-        }
-
-        if (count == 4 || (count == 3 && System.currentTimeMillis() - drawingQuad > 1000)) {
-            points = new FloatPoint[count];
-            for (int i = 0; i < count; i++) {
-                points[i] = new FloatPoint(event.getX(i), event.getY(i));
-            }
-        }
-
-        if (count == 4) {
-            drawingQuad = System.currentTimeMillis();
-        }
-
-        redraw();
-
-        return true;
-    }
-
-    private FloatPoint findClosesPoint(MotionEvent event) {
-        for (FloatPoint point : points) {
-            if (Math.abs(point.x - event.getX()) <= HIT_BOX && Math.abs(point.y - event.getY()) <= HIT_BOX) {
-                return point;
-            }
-        }
-
-        return null;
-    }
-
     private void redraw() {
-        if (points.length > 2) {
-            shapeView.setPolygon(points);
+        if (point != null) {
+            shapeView.setLocation(point);
         }
     }
 
     private void move(float xMovement, float yMovement) {
-        for (FloatPoint point : points) {
-            point.x += xMovement;
-            point.y += yMovement;
-        }
-    }
-
-    private boolean shouldTranslate(MotionEvent event) {
-        double maxX = Integer.MIN_VALUE;
-        double maxY = Integer.MIN_VALUE;
-        double minX = Integer.MAX_VALUE;
-        double minY = Integer.MAX_VALUE;
-
-        for (FloatPoint point : points) {
-            if (point.x > maxX) maxX = point.x;
-            if (point.x < minX) minX = point.x;
-            if (point.y > maxY) maxY = point.y;
-            if (point.y < minY) minY = point.y;
-        }
-
-        return twoFingerStart != null &&
-                event.getX() < maxX && event.getX() > minX &&
-                event.getY() < maxY && event.getY() > minY;
+        point.x += xMovement;
+        point.y += yMovement;
     }
 
     @Override
@@ -158,5 +96,28 @@ public class MainActivity extends Activity implements View.OnTouchListener, Sens
 
     @Override
     public void onAccuracyChanged(Sensor sensor, int i) {
+    }
+
+    private class GameThread extends Thread {
+        private BluetoothServerSocket socket;
+
+        public GameThread(BluetoothServerSocket socket) {
+            this.socket = socket;
+        }
+
+        @Override
+        public void run() {
+            try {
+                BluetoothSocket clientSocket = socket.accept();
+                InputStream stream = clientSocket.getInputStream();
+                BufferedReader reader = new BufferedReader(new InputStreamReader(stream));
+                while(true){
+                    String line = reader.readLine();
+                    Log.d("Line", line);
+                }
+            } catch (IOException e) {
+                Log.e("No worky", "", e);
+            }
+        }
     }
 }
